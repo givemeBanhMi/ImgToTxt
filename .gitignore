@@ -1,0 +1,30 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+.env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / Build
+build/
+dist/
+*.egg-info/
+
+# Local configuration (contains secrets)
+config.json
+
+# Large OCR binaries
+Tesseract-OCR/
+
+# Sample Data / Outputs
+New folder/
+New folder (2)/
+Outputs/
+
+# IDE settings
+.vscode/
+.idea/

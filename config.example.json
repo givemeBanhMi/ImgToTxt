@@ -1,0 +1,10 @@
+{
+    "api_key": "YOUR_API_KEY",
+    "api_base_url": "http://localhost:20128/v1",
+    "model_name": "ImgToText",
+    "image_folder": "./New folder",
+    "excel_file": "",
+    "thread_count": 1,
+    "use_offline": false,
+    "tesseract_path": "./Tesseract-OCR/tesseract.exe"
+}
