@@ -6,6 +6,9 @@ import threading
 import os
 import glob
 import time
+import subprocess
+import shutil
+import atexit
 import concurrent.futures, queue
 from config_manager import load_config, save_config
 from ocr_service import extract_passport_data
@@ -33,6 +36,9 @@ class App(ctk.CTk):
         self.output_excel_path = ""
         self.results_data = []
 
+        self.router_process = None
+        self.start_9router()
+
         self.create_widgets()
         self.load_initial_data()
         # Initialize pause control and timer for future use
@@ -41,6 +47,49 @@ class App(ctk.CTk):
         self.is_paused = False
         self.is_processing = False
         self.start_time = None  # will be set when processing starts
+
+    def start_9router(self):
+        router_path = shutil.which("9router")
+        if not router_path:
+            user_profile = os.environ.get("USERPROFILE", "")
+            fallback = os.path.join(user_profile, "AppData", "Roaming", "npm", "9router.cmd")
+            if os.path.exists(fallback):
+                router_path = fallback
+
+        if router_path:
+            try:
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = 0  # SW_HIDE
+                
+                self.router_process = subprocess.Popen(
+                    [router_path, "-n"],
+                    startupinfo=startupinfo,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                atexit.register(self.cleanup_router)
+            except Exception as e:
+                print(f"Error starting 9router: {e}")
+
+    def cleanup_router(self):
+        if self.router_process:
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(self.router_process.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+            except Exception:
+                try:
+                    self.router_process.kill()
+                except Exception:
+                    pass
+            self.router_process = None
+
+    def destroy(self):
+        self.cleanup_router()
+        super().destroy()
 
     def toggle_pause(self):
         if self.is_paused:
