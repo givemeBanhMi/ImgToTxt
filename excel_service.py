@@ -11,6 +11,25 @@ def normalize_passport_no(val):
     return str(val).strip().upper()
 
 
+def normalize_character_variants(val):
+    """Chuẩn hóa các ký tự dễ nhầm lẫn do lỗi OCR (O->0, I->1, etc.) để so khớp."""
+    if not val:
+        return ""
+    val = str(val).strip().upper()
+    replacements = {
+        'O': '0',
+        'I': '1',
+        'L': '1',
+        'S': '5',
+        'Z': '2',
+        'G': '6',
+        'B': '8'
+    }
+    for char, rep in replacements.items():
+        val = val.replace(char, rep)
+    return val
+
+
 def ocr_date_to_excel_int(date_str):
     """
     Chuyển đổi ngày từ format OCR (DD/MM/YYYY) sang format Excel (YYYYMMDD int).
@@ -90,7 +109,7 @@ class ExcelMatcher:
     def find_row_by_passport(self, passport_num):
         """
         Tìm index dòng trong DataFrame theo Document Number.
-        Trả về index (int) hoặc None nếu không tìm thấy.
+        Hỗ trợ so khớp chính xác và khớp mờ (Fuzzy matching) phòng trường hợp OCR sai ký tự.
         """
         if self.df is None or self.df.empty or not passport_num:
             return None
@@ -99,10 +118,38 @@ class ExcelMatcher:
         if not search_term:
             return None
 
+        # 1. So khớp chính xác 100% trước
         for idx, row in self.df.iterrows():
             doc_no = normalize_passport_no(row.get('Document Number'))
             if doc_no == search_term:
                 return idx
+
+        # 2. Khớp theo chuẩn hóa biến thể ký tự tương đồng (O/0, I/1, ...)
+        norm_search = normalize_character_variants(search_term)
+        for idx, row in self.df.iterrows():
+            doc_no = normalize_passport_no(row.get('Document Number'))
+            if normalize_character_variants(doc_no) == norm_search:
+                return idx
+
+        # 3. Quét khớp mờ sử dụng SequenceMatcher (độ tương đồng >= 80%)
+        import difflib
+        best_match_idx = None
+        best_score = 0.0
+        
+        for idx, row in self.df.iterrows():
+            doc_no = normalize_passport_no(row.get('Document Number'))
+            if not doc_no:
+                continue
+            # Chỉ so khớp nếu độ dài tương đồng để tránh khớp nhầm hoàn toàn
+            if abs(len(doc_no) - len(search_term)) <= 2:
+                score = difflib.SequenceMatcher(None, search_term, doc_no).ratio()
+                if score > best_score:
+                    best_score = score
+                    best_match_idx = idx
+
+        # Ngưỡng chấp nhận khớp mờ là 80% trở lên
+        if best_score >= 0.8:
+            return best_match_idx
 
         return None
 

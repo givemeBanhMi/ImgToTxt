@@ -16,15 +16,6 @@ def extract_passport_data(image_path, api_key, api_base_url, model_name, use_off
     """
     # Offline mode bypasses API key/model validation
     if use_offline:
-        try:
-            from PIL import Image
-            ocr = _get_easyocr()
-        except Exception as e:
-            return _empty_result(
-                "OCR Offline Error: Thiếu thư viện. "
-                "Hãy cài đặt: pip install easyocr passporteye pillow"
-            )
-
         _configure_tesseract()
 
         passporteye_result = None
@@ -34,16 +25,20 @@ def extract_passport_data(image_path, api_key, api_base_url, model_name, use_off
             passporteye_result = None
 
         try:
-            result = ocr.readtext(image_path)
-            raw_text_lines = []
-            if result:
-                for line in result:
-                    if len(line) >= 2:
-                        text_val = line[1]
-                        raw_text_lines.append(text_val)
-            raw_text = "\n".join(raw_text_lines)
+            import pytesseract
+            from PIL import Image
+            
+            # Tiền xử lý ảnh bằng OpenCV
+            processed_img = _preprocess_image_cv2(image_path)
+            if processed_img is not None:
+                pil_img = Image.fromarray(processed_img)
+            else:
+                pil_img = Image.open(image_path)
+            
+            # Nhận diện chữ bằng Tesseract
+            raw_text = pytesseract.image_to_string(pil_img, lang='eng+vie', config='--oem 3 --psm 3')
         except Exception as e:
-            return _empty_result(f"OCR Offline Error (EasyOCR): {e}")
+            return _empty_result(f"OCR Offline Error (Tesseract): {e}")
 
         fields = _parse_offline_passport_text(raw_text)
         fields = _merge_offline_results(passporteye_result, fields)
@@ -182,7 +177,39 @@ def _parse_field(text, field_name):
     return ""
 
 
+def _preprocess_image_cv2(image_path):
+    """
+    Tiền xử lý ảnh bằng OpenCV để tăng độ chính xác OCR cho Tesseract.
+    """
+    try:
+        import cv2
+        import numpy as np
+        
+        # Đọc ảnh dưới dạng ảnh xám
+        img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return None
+            
+        # Thử phóng to ảnh nếu kích thước quá nhỏ
+        h, w = img.shape
+        if w < 1200 or h < 1200:
+            scale = 2
+            img = cv2.resize(img, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
+            
+        # Khử nhiễu nhẹ
+        img = cv2.GaussianBlur(img, (3, 3), 0)
+        
+        # Nhị phân hóa Otsu kết hợp Adaptive Thresholding để phân tách chữ rõ ràng
+        img_thresh = cv2.adaptiveThreshold(
+            img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 4
+        )
+        return img_thresh
+    except Exception as e:
+        print(f"Lỗi tiền xử lý OpenCV: {e}")
+        return None
+
 _easyocr_instance = None
+
 
 def _get_easyocr():
     global _easyocr_instance
