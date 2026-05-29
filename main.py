@@ -12,7 +12,7 @@ import atexit
 import concurrent.futures, queue
 from config_manager import load_config, save_config
 from ocr_service import extract_passport_data
-from excel_service import ExcelMatcher, save_results_to_excel
+from excel_service import ExcelMatcher, save_updated_excel
 
 # All columns for the Treeview
 TREE_COLUMNS = (
@@ -328,6 +328,11 @@ class App(ctk.CTk):
         excel_path = self.excel_file_entry.get().strip()
 
         # Validate required fields
+        if not excel_path or not os.path.exists(excel_path):
+            messagebox.showwarning("Thiếu thông tin",
+                                   "Vui lòng chọn file Excel SecureScan (bắt buộc).")
+            return
+
         if self.use_offline:
             if not img_folder:
                 messagebox.showwarning("Thiếu thông tin",
@@ -374,13 +379,17 @@ class App(ctk.CTk):
 
 
     def process_files(self, api_key, api_url, model_name, img_folder, excel_path, thread_count):
-        # Load Excel data if provided
-        matcher = None
-        if excel_path and os.path.exists(excel_path):
-            self.after(0, self.update_status, "Đang tải dữ liệu Excel...", None)
-            matcher = ExcelMatcher(excel_path)
-        else:
-            self.after(0, self.update_status, "Không dùng Excel, chỉ OCR ảnh.", None)
+        # Load Excel SecureScan (bắt buộc)
+        self.after(0, self.update_status, "Đang tải dữ liệu Excel SecureScan...", None)
+        matcher = ExcelMatcher(excel_path)
+        if matcher.df is None:
+            self.is_processing = False
+            self.after(0, self.update_status, "Lỗi: Không đọc được file Excel SecureScan.", 1.0)
+            self.after(0, lambda: self.start_btn.configure(state="normal"))
+            return
+
+        self.after(0, self.update_status,
+                   f"Đã tải Excel: {len(matcher.df)} dòng. Đang quét ảnh...", None)
 
         image_files = []
         for ext in ('*.png', '*.jpg', '*.jpeg', '*.PNG', '*.JPG', '*.JPEG'):
@@ -395,6 +404,7 @@ class App(ctk.CTk):
             return
 
         results_lock = threading.Lock()
+        matcher_lock = threading.Lock()
         completed_count = 0
         rate_limit_warned = False
 
@@ -433,9 +443,8 @@ class App(ctk.CTk):
                         retries2 -= 1
                     else:
                         break
-                
+
                 if result2 and result2.get("trang_thai") == "Thành công":
-                    # So sánh số passport và ngày cấp
                     if result.get("so_passport") == result2.get("so_passport") and result.get("ngay_cap") == result2.get("ngay_cap"):
                         double_check_status = "Verified"
                     else:
@@ -443,14 +452,18 @@ class App(ctk.CTk):
                 else:
                     double_check_status = "Lỗi khi Double Check"
 
-            # --- Tích hợp Excel Matcher (nếu có) ---
+            # --- Đối chiếu & Điền thông tin vào Excel ---
             passport_num = result.get("so_passport", "")
-            if passport_num and matcher:
-                is_match = matcher.match_passport(passport_num)
-                match_status = "Khớp Excel" if is_match else "Không có trong Excel"
-                final_status = f"{double_check_status} - {match_status}"
+            match_status = ""
+            if passport_num and double_check_status in ("Verified", "Thành công"):
+                with matcher_lock:
+                    match_status = matcher.process_ocr_result(result, file_name)
+            elif passport_num:
+                match_status = "OCR chưa xác nhận"
             else:
-                final_status = double_check_status
+                match_status = "Không có số Passport"
+
+            final_status = f"{double_check_status} - {match_status}"
 
             return {
                 "stt": idx + 1,
@@ -508,14 +521,20 @@ class App(ctk.CTk):
                 self.after(0, self.add_tree_row, row)
                 self.after(0, self.update_status, f"Đã xử lý {completed_count}/{total} ảnh...", progress)
 
+        # Lưu file Excel đã cập nhật
         self.results_data.sort(key=lambda item: item["stt"])
-        output_file, success = save_results_to_excel(self.results_data, self.output_folder)
+        self.after(0, self.update_status, "Đang lưu file Excel kết quả...", None)
+
+        output_file, success = save_updated_excel(matcher, self.output_folder)
         if success:
             self.output_excel_path = output_file
+            stats = matcher.get_match_stats()
+            msg = (f"Hoàn thành! Khớp {stats['matched']}/{stats['total_excel']} dòng. "
+                   f"Đã lưu: {output_file}")
             self.after(0, lambda: self.open_excel_btn.configure(state="normal"))
-            self.after(0, self.update_status, f"Hoàn thành! Đã lưu kết quả tại {output_file}", 1.0)
+            self.after(0, self.update_status, msg, 1.0)
         else:
-            self.after(0, self.update_status, f"Hoàn thành xử lý ảnh, nhưng lỗi lưu Excel: {output_file}", 1.0)
+            self.after(0, self.update_status, f"Lỗi lưu Excel: {output_file}", 1.0)
 
         self.is_processing = False
         self.after(0, lambda: self.start_btn.configure(state="normal"))
